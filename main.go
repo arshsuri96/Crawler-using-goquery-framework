@@ -19,7 +19,7 @@ type SeoData struct {
 	StatusCode      int
 }
 
-type parser interface {
+type Parser interface {
 	getSEOData(resp *http.Response) (SeoData, error)
 }
 
@@ -58,11 +58,11 @@ func extractSitemapURLs(startURL string) []string {
 				if err != nil {
 					log.Printf("Error retrieving URL: %s", link)
 				}
-				urls, _ := extractUrls(response)
+				urls, _ := extractURLs(response)
 				if err != nil {
 					log.Printf("Error extracting document from response, URL: %s", link)
 				}
-				sitemapFiles, pages := isSitemap(urls)
+				sitemapFiles, pages := isSiteMap(urls)
 				if sitemapFiles != nil {
 					worklist <- sitemapFiles
 				}
@@ -89,11 +89,11 @@ func isSiteMap(url []string) ([]string, []string) {
 		}
 	}
 
-	return siteMapFiles, page
+	return siteMapFiles, pages
 }
 
 func makeRequest(url string) (*http.Response, error) {
-	http.Client{
+	client := http.Client{
 		Timeout: 10 * time.Second,
 	}
 
@@ -112,30 +112,16 @@ func makeRequest(url string) (*http.Response, error) {
 
 }
 
-// in scrape page, we crawl the page and then we will get SEOdata from it
-func scrapeURL(url string, parser Parser) (SeoData, error) {
-	res, err := crawlPage(url)
-	if err != nil {
-		return SeoData{}, err
-	}
-	data, err := parser.getSEOData(res)
-	if err != nil {
-		//empty slice of strings SeoData will be returned
-		return SeoData{}, err
-	}
-	return data, nil
-}
-
-func scrapeUrl(url []string, parser Parser, concurrecy int) []SeoData {
+func scrapeUrls(url []string, parser Parser, concurrecy int) []SeoData {
 	tokens := make(chan struct{}, concurrecy)
 	var n int
 	worklist := make(chan []string)
-	results := SeoData{}
+	results := []SeoData{}
 
-	go func() { workList <- urls }()
+	go func() { worklist <- url }()
 	for ; n < 0; n-- {
 		list := <-worklist
-		for _, url = range list {
+		for _, url := range list {
 			if url != "" {
 				n++
 				go func(url string, token chan struct{}) {
@@ -144,17 +130,18 @@ func scrapeUrl(url []string, parser Parser, concurrecy int) []SeoData {
 					if err != nil {
 						log.Printf("Encountered error: %s", url)
 					} else {
-						results := append(results, res)
+						results = append(results, res)
 					}
 					worklist <- []string{}
-				}(ur, tokens)
+				}(url, tokens)
 			}
 		}
 	}
+	return results
 }
 
-func extraURLs(response *http.Response) ([]string, error) {
-	doc, err := goquery.NewDocumentResponse(response)
+func extractURLs(response *http.Response) ([]string, error) {
+	doc, err := goquery.NewDocumentFromResponse(response)
 	if err != nil {
 		return nil, err
 	}
@@ -169,20 +156,25 @@ func extraURLs(response *http.Response) ([]string, error) {
 }
 
 // to scrape a page, we need to crawl a page and get SEOdata from it
-func scrapPage(url string, parser Parser) (SeoData, error) {
-	res, err := crawlPage(url)
+func scrapePage(url string, token chan struct{}, parser Parser) (SeoData, error) {
+	res, err := crawlPage(url, token)
 	if err != nil {
 		return SeoData{}, err
 	}
 	data, err := parser.getSEOData(res)
 	if err != nil {
-		return SeoData{}, error
+		return SeoData{}, err
 	}
 	return data, nil
 }
 
-func crawlPage() {
-
+func crawlPage(url string, tokens chan struct{}) (*http.Response, error) {
+	tokens <- struct{}{}
+	resp, err := makeRequest(url)
+	if err != nil {
+		return nil, err
+	}
+	return resp, err
 }
 
 func (d DefaultParser) getSEOData(resp *http.Response) (SeoData, error) {
@@ -202,8 +194,8 @@ func (d DefaultParser) getSEOData(resp *http.Response) (SeoData, error) {
 
 // its going to take url as input and return SEOData
 func scrapeSiteMap(url string, parser Parser, concurrency int) []SeoData {
-	results := extractSitemapURL(url)
-	res := scrapeURL(results, parser, concurrency)
+	results := extractSitemapURLs(url)
+	res := scrapeUrls(results, parser, concurrency)
 	return res
 	// the result of scrapeURL will be of the format SEOdata
 }
@@ -212,6 +204,6 @@ func main() {
 	p := DefaultParser{}
 	results := scrapeSiteMap("httpd://www.quicksprout.com/sitemap.xml", p, 10)
 	for _, res := range results {
-		fmt.Prinlt(res)
+		fmt.Println(res)
 	}
 }
